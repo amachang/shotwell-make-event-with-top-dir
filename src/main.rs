@@ -6,6 +6,7 @@ use sqlx::{sqlite::SqliteConnection, Connection, Row};
 use anyhow::Result;
 use futures::stream::StreamExt;
 use chrono::Utc;
+use indicatif::ProgressBar;
 
 const KNOWN_SCHEMA_VERSION: i64 = 24;
 
@@ -79,7 +80,7 @@ async fn main() -> Result<()> {
     let dry_run = !args.run;
 
     let db_path = config.db_path();
-    log::info!("Backup database file: {:?}", db_path);
+    println!("Backup database file: {:?}", db_path);
 
     jdt::backup(&db_path)?;
     let db_path = match db_path.to_str() {
@@ -96,7 +97,7 @@ async fn main() -> Result<()> {
 
     let tx_result: Result<()> = loop {
         // check schema_version
-        log::info!("Querying VersionTable");
+        println!("Querying VersionTable");
 
         let query = "SELECT schema_version FROM VersionTable ORDER BY schema_version DESC LIMIT 1";
         log::debug!("SQL: {}", query);
@@ -122,7 +123,7 @@ async fn main() -> Result<()> {
         let mut id_to_event_name: HashMap<i64, String> = HashMap::new();
         let mut event_name_to_first_photo_id_and_time: HashMap<String, (i64, i64)> = HashMap::new();
         {
-            log::info!("Querying PhotoTable");
+            println!("Querying PhotoTable");
 
             let query = "SELECT id, filename, exposure_time, time_created FROM PhotoTable";
             log::debug!("SQL: {}", query);
@@ -208,6 +209,8 @@ async fn main() -> Result<()> {
          * EventTable schema:
          * CREATE TABLE EventTable (id INTEGER PRIMARY KEY, name TEXT, primary_photo_id INTEGER, time_created INTEGER,primary_source_id TEXT,comment TEXT);
          */
+        let n_photos = id_to_event_name.len();
+        let progress_bar = ProgressBar::new(n_photos as u64);
         let mut id_event_name_iter = id_to_event_name.iter();
         let tx_result: Result<()> = loop {
             let (id, event_name) = match id_event_name_iter.next() {
@@ -215,7 +218,7 @@ async fn main() -> Result<()> {
                 None => break Ok(()),
             };
 
-            log::info!("Processing photo id: {}", id);
+            progress_bar.inc(1);
 
             // insert if not exists
             let query = "SELECT id FROM EventTable WHERE name = ?";
@@ -234,7 +237,7 @@ async fn main() -> Result<()> {
                     Err(e) => break Err(e.into()),
                 },
                 None => {
-                    log::info!("Event not found, creating new event: {}", event_name);
+                    println!("Event not found, creating new event: {}", event_name);
 
                     // use the first photo as the primary photo
                     let first_photo_id = match event_name_to_first_photo_id_and_time.get(event_name) {
@@ -273,6 +276,8 @@ async fn main() -> Result<()> {
                 Err(e) => break Err(e.into()),
             };
         };
+        progress_bar.finish();
+
         break tx_result;
     };
 
